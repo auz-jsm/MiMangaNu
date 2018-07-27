@@ -4,6 +4,7 @@ import android.animation.Animator;
 import android.animation.ValueAnimator;
 import android.content.Context;
 import android.graphics.Canvas;
+import android.support.annotation.NonNull;
 import android.view.MotionEvent;
 
 public class VerticalReader extends ReaderContinuous {
@@ -44,9 +45,14 @@ public class VerticalReader extends ReaderContinuous {
         pagesLoaded = true;
     }
 
+    @Override
+    protected void generateSegmentsArray() {
+
+    }
+
     public void reloadImage(int idx) {
         int pageIdx;
-        if(idx == 0)
+        if (idx == 0)
             pageIdx = idx;
         else
             pageIdx = idx - 1;
@@ -54,12 +60,12 @@ public class VerticalReader extends ReaderContinuous {
             int cPage = currentPage - 1;
             if (pages.size() < cPage || cPage < 0)
                 cPage = 0;
-            if(cPage >= pages.size())
-                cPage = pages.size()-1;
+            if (cPage >= pages.size())
+                cPage = pages.size() - 1;
             float value = 0;
             if (pages.get(cPage) != null)
                 value = pages.get(cPage).init_visibility;
-            Page page = initValues(pages.get(pageIdx).path);
+            Page page = initValues(pages.get(pageIdx).path, pageIdx + 1);
             pages.set(pageIdx, page);
             calculateParticularScale(pages.get(pageIdx));
             calculateVisibilities();
@@ -89,7 +95,7 @@ public class VerticalReader extends ReaderContinuous {
                 if (currentPage == 1)
                     readerListener.onStartOver();
                 else
-                    goToPage(currentPage -1);
+                    goToPage(currentPage - 1);
             } else if (e.getX() > getWidth() / 4 * 3) {
                 if (isLastPageVisible())
                     readerListener.onEndOver();
@@ -162,7 +168,7 @@ public class VerticalReader extends ReaderContinuous {
 
     @Override
     public void postLayout() {
-        if(yScroll == 0)
+        if (yScroll == 0)
             absoluteScroll(xScroll, getPagePosition(currentPage - 1));
         generateDrawPool();
         if (readerListener != null) {
@@ -236,8 +242,8 @@ public class VerticalReader extends ReaderContinuous {
     }
 
     @Override
-    protected Page getNewPage() {
-        return new VPage();
+    protected Page getNewPage(int number) {
+        return new VPage(number);
     }
 
     @Override
@@ -274,6 +280,11 @@ public class VerticalReader extends ReaderContinuous {
 
 
     protected class VPage extends Page {
+
+        public VPage(int number) {
+            super(number);
+        }
+
         @Override
         public boolean isVisible() {
             float visibleBottom = (yScroll * mScaleFactor + screenHeight);
@@ -290,19 +301,21 @@ public class VerticalReader extends ReaderContinuous {
                             freeMemory();
                         }
                     }
-                    if (visibility && segments != null)
-                        for (Segment s : segments) {
-                            s.checkVisibility();
+                    for (int i = 0; i < yp; i++) {
+                        for (int j = 0; j < xp; j++) {
+                            //TODO segments[i][j].checkVisibility();
                         }
+                    }
                 }
             }).start();
             return visibility;
         }
 
         @Override
-        public Segment getNewSegment() {
-            return new VSegment();
+        Line getNewLine(float init_visibility, float end_visibility, int segments) {
+            return new VLine(init_visibility, end_visibility, segments);
         }
+
 
         @Override
         public float getVisiblePercent() {
@@ -321,37 +334,39 @@ public class VerticalReader extends ReaderContinuous {
             }
         }
 
-        public class VSegment extends Segment {
-            @Override
-            public boolean checkVisibility() {
-                float visibleTop = yScroll * mScaleFactor;
-                float visibleBottom = visibleTop + screenHeight;
-                float _init_visibility = init_visibility + dy * unification_scale;
-                float _end_visibility = _init_visibility + ph * unification_scale;
-                boolean visibility = (visibleTop <= _init_visibility * mScaleFactor && _init_visibility * mScaleFactor <= visibleBottom) ||
-                        (visibleTop <= _end_visibility * mScaleFactor && _end_visibility * mScaleFactor <= visibleBottom) ||
-                        (_init_visibility * mScaleFactor < visibleTop && _end_visibility * mScaleFactor >= visibleBottom);
-                if (visible != visibility) {
-                    visibilityChanged();
-                }
-                return visibility;
+        public class VLine extends Line {
+            public VLine(float ini_line_visibility, float end_line_visibility, int segments) {
+                super(ini_line_visibility, end_line_visibility, segments);
             }
 
             @Override
-            public void draw(Canvas canvas) {
-                if (state == ImagesStates.LOADED) {
-                    mPaint.setAlpha(alpha);
-                    m.reset();
-                    m.postTranslate(dx, dy);
-                    m.postScale(unification_scale, unification_scale);
-                    m.postTranslate(-xScroll, init_visibility - yScroll);
-                    m.postScale(mScaleFactor, mScaleFactor);
-                    try {
-                        canvas.drawBitmap(segment, m, mPaint);
-                    } catch (Exception ignored) {
-                        ignored.printStackTrace();
+            public Segment getNewSegment() {
+                return new VSegment();
+            }
+
+            public class VSegment extends Line.Segment {
+
+                public VSegment() {
+                    super();
+                }
+
+                @Override
+                public void draw(Canvas canvas) {
+                    if (state == ImagesStates.LOADED) {
+                        mPaint.setAlpha(alpha);
+                        m.reset();
+                        m.postTranslate(dx, dy);
+                        m.postScale(unification_scale, unification_scale);
+                        m.postTranslate(-xScroll, init_visibility - yScroll);
+                        m.postScale(mScaleFactor, mScaleFactor);
+                        try {
+                            canvas.drawBitmap(segment, m, mPaint);
+                        } catch (Exception ignored) {
+                            ignored.printStackTrace();
+                        }
                     }
                 }
+
             }
         }
     }

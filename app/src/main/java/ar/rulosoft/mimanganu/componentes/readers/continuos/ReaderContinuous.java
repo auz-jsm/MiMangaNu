@@ -37,14 +37,13 @@ import rapid.decoder.BitmapDecoder;
 public abstract class ReaderContinuous extends Reader implements GestureDetector.OnGestureListener, GestureDetector.OnDoubleTapListener {
     protected int currentPage = 0, lastBestVisible = 0;
     protected float lastPageBestPercent = 0f;
-    protected int mTextureMax = 1024;
+    protected int mTextureMax = 200;
 
     protected boolean animatingSeek = false;
     protected boolean stopAnimationsOnTouch = false, stopAnimationOnVerticalOver = false, stopAnimationOnHorizontalOver = false;
     protected boolean iniVisibility, endVisibility;
     protected boolean pagesLoaded = false, viewReady = false, layoutReady = false;
     protected float xScroll = 0, yScroll = 0;
-    protected ArrayList<Page> pages;
     protected ScaleGestureDetector mScaleDetector;
     protected GestureDetector mGestureDetector;
     protected Rect screen;
@@ -55,7 +54,9 @@ public abstract class ReaderContinuous extends Reader implements GestureDetector
     int screenHeight, screenWidth;
     int screenHeightSS, screenWidthSS; // Sub scaled
     Handler mHandler;
-    ArrayList<Page.Segment> toDraw = new ArrayList<>();
+    protected ArrayList<Page> pages;
+    protected ArrayList<Page.Line.Segment>[] segments;
+    ArrayList<Page.Line.Segment> toDraw = new ArrayList<>();
     boolean drawing = false, preparing = false;
 
     float ppi;
@@ -76,9 +77,11 @@ public abstract class ReaderContinuous extends Reader implements GestureDetector
 
     protected abstract void calculateVisibilities();
 
+    protected abstract void generateSegmentsArray();
+
     public abstract void goToPage(int aPage);
 
-    protected abstract Page getNewPage();
+    protected abstract Page getNewPage(int number);
 
     public abstract void reset();
 
@@ -87,6 +90,8 @@ public abstract class ReaderContinuous extends Reader implements GestureDetector
     public abstract void postLayout();
 
     public abstract void reloadImage(int idx);
+
+    public abstract float getPagePosition(int page);// Starting from 0
 
     @Override
     public void setBlueFilter(float bf) {
@@ -173,73 +178,25 @@ public abstract class ReaderContinuous extends Reader implements GestureDetector
             new Thread(new Runnable() {
                 @Override
                 public void run() {
-                    ArrayList<Page.Segment> _segments = new ArrayList<>();
+                    ArrayList<Page.Line.Segment> _segments = new ArrayList<>();
                     if (viewReady) {
                         lastBestVisible = -1;
                         iniVisibility = false;
                         endVisibility = false;
                         lastPageBestPercent = 0f;
                         if (pages != null) {
-                            int currentPageIdx = currentPage - 1;
                             boolean tested = false;
                             while (!tested) {
                                 tested = true;
                                 try {
-                                    for (int i = currentPageIdx - 1; i >= 0; i--) {//pre
-                                        Page page = pages.get(i);
+                                    for (Page page : pages.subList(getIndex(pages, xScroll), getIndex(pages, xScroll + screenWidth) + 1)) {
                                         if (page.isVisible()) {
-                                            iniVisibility = true;
                                             _segments.addAll(page.getVisibleSegments());
                                             if (page.getVisiblePercent() >= lastPageBestPercent) {
+                                                page.isVisible();
                                                 lastPageBestPercent = page.getVisiblePercent();
                                                 lastBestVisible = pages.indexOf(page);
                                             }
-                                        } else {
-                                            break;
-                                        }
-                                    }
-                                    {//actual
-                                        if (currentPageIdx >= 0 && currentPageIdx < pages.size()) {
-                                            Page page = pages.get(currentPageIdx);
-                                            if (page.isVisible()) {
-                                                iniVisibility = true;
-                                                _segments.addAll(page.getVisibleSegments());
-                                                if (page.getVisiblePercent() >= lastPageBestPercent) {
-                                                    lastPageBestPercent = page.getVisiblePercent();
-                                                    lastBestVisible = pages.indexOf(page);
-                                                }
-                                            }
-                                        }
-                                    }
-                                    for (int i = currentPageIdx + 1; i < pages.size(); i++) {//next
-                                        Page page = pages.get(i);
-                                        if (page.isVisible()) {
-                                            iniVisibility = true;
-                                            _segments.addAll(page.getVisibleSegments());
-                                            if (page.getVisiblePercent() >= lastPageBestPercent) {
-                                                lastPageBestPercent = page.getVisiblePercent();
-                                                lastBestVisible = pages.indexOf(page);
-                                            }
-                                        } else {
-                                            break;
-                                        }
-                                    }
-
-                                    if (_segments.size() == 0) {//if none in range find...
-                                        for (int i = 0; i < pages.size(); i++) {
-                                            Page page = pages.get(i);
-                                            if (page.isVisible()) {
-                                                iniVisibility = true;
-                                                _segments.addAll(page.getVisibleSegments());
-                                                if (page.getVisiblePercent() >= lastPageBestPercent) {
-                                                    lastPageBestPercent = page.getVisiblePercent();
-                                                    lastBestVisible = pages.indexOf(page);
-                                                }
-                                            } else {
-                                                if (iniVisibility) endVisibility = true;
-                                            }
-                                            if (iniVisibility && endVisibility)
-                                                break;
                                         }
                                     }
                                 } catch (Exception e) {
@@ -272,24 +229,24 @@ public abstract class ReaderContinuous extends Reader implements GestureDetector
 
     @Override
     protected void onDraw(Canvas canvas) {
-            if (toDraw.size() > 0) {
-                for (Page.Segment s : toDraw) {
-                    s.draw(canvas);
-                }
-                cache = canvas;
-            } else {
-                generateDrawPool();
-                if (cache != null)
-                    canvas = cache;
+        if (toDraw.size() > 0) {
+            for (Page.Line.Segment s : toDraw) {
+                s.draw(canvas);
             }
-            preparing = false;
-            drawing = false;
+            cache = canvas;
+        } else {
+            generateDrawPool();
+            if (cache != null)
+                canvas = cache;
+        }
+        preparing = false;
+        drawing = false;
     }
 
     public void setPaths(List<String> paths) {
         pages = new ArrayList<>();
         for (int i = 0; i < paths.size(); i++) {
-            pages.add(initValues(paths.get(i)));
+            pages.add(initValues(paths.get(i), i + 1));
         }
         if (layoutReady) {
             calculateParticularScale();
@@ -298,8 +255,8 @@ public abstract class ReaderContinuous extends Reader implements GestureDetector
         }
     }
 
-    protected Page initValues(String path) {
-        Page dimension = getNewPage();
+    protected Page initValues(String path, int number) {
+        Page dimension = getNewPage(number);
         dimension.path = path;
         File f = new File(path);
         if (f.exists()) {
@@ -348,9 +305,330 @@ public abstract class ReaderContinuous extends Reader implements GestureDetector
     }
 
     public void setMaxTexture(int mTextureMax) {
-        if (mTextureMax > 0)
-            this.mTextureMax = mTextureMax;
+        //if (mTextureMax > 0)
+        //TODO this.mTextureMax = mTextureMax;
     }
+
+    @Override
+    protected Parcelable onSaveInstanceState() {
+        Bundle b = new Bundle();
+        b.putParcelable("state", super.onSaveInstanceState());
+        return b;
+    }
+
+    @Override
+    protected void onRestoreInstanceState(Parcelable state) {
+        if (state instanceof Bundle) {
+            super.onRestoreInstanceState(((Bundle) state).getParcelable("state"));
+        } else {
+            super.onRestoreInstanceState(state);
+        }
+    }
+
+
+    private InputStream getBitmapFromAsset(String strName) {
+        AssetManager assetManager = getContext().getAssets();
+        InputStream iStr = null;
+        try {
+            iStr = assetManager.open(strName);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return iStr;
+    }
+
+
+    public enum ImagesStates {NULL, RECYCLED, ERROR, LOADING, LOADED}
+
+    public abstract class Page {
+        int number;
+        String path;
+        float original_width;
+        float original_height;
+        float init_visibility;       // on horizontal this is on x axis, vertical in y
+        float end_visibility;        // same here
+        float unification_scale;     // not all pages are of same size, height for horizontal, width for vertical
+        float scaled_height;         // post unification scale value
+        float scaled_width;
+        boolean initialized = false;
+        Line[] lines;
+        int pxs, pys;               //part part size o x or y
+        int xp, yp, tp;             //x and y parts count and total
+        boolean error = false;
+        boolean lastVisibleState = false;
+
+        public Page(int number) {
+            this.number = number;
+        }
+
+        public abstract boolean isVisible();
+
+        abstract Line getNewLine(float init_visibility, float end_visibility, int segments);
+
+        public abstract float getVisiblePercent();
+
+        // base horizontal reader
+        public void initValues() {
+            yp = (int) (original_height / mTextureMax) + 1;
+            pys = (int) (original_height / yp);
+            xp = (int) (original_width / mTextureMax) + 1;
+            pxs = (int) (original_width / xp);
+            tp = xp * yp;
+            lines = new Line[xp];
+            Line.Segment[] lineSegments = new Line.Segment[yp];
+            for (int i = 0; i < xp; i++) {
+                lines[i] = getNewLine(init_visibility + lineSegments[0].dx,
+                    init_visibility + lineSegments[0].dx + pxs, yp);
+                for (int j = 0; j < yp; j++) {
+                    lines[i].segments[j].dy = i * yp;
+                    lines[i].segments[j].dx = j * xp;
+                }
+            }
+            initialized = true;
+        }
+
+        public String getPath() {
+            return path;
+        }
+
+        public void freeMemory() {
+            if (segments != null)
+                for (int i = 0; i < xp; i++) {
+                    lines[i].freeMemory();
+                }
+        }
+
+        public ArrayList<Line.Segment> getVisibleSegments() {
+            ArrayList<Line.Segment> _segments = new ArrayList<>();
+            if (segments != null)
+                for (int i = 0; i < xp; i++) {
+                    if (lines[i].isVisible()) {
+                        _segments.add(lines[i].segments[0]);
+                    }
+                }
+            return _segments;
+        }
+
+        public void showOnLoad(final Line line) {
+            if (line.isVisible()) {
+                mHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        ValueAnimator va = ValueAnimator.ofInt(0, 255);
+                        va.setDuration(300);
+                        va.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
+                            @Override
+                            public void onAnimationUpdate(ValueAnimator valueAnimator) {
+                                line.alpha = (int) valueAnimator.getAnimatedValue();
+                                generateDrawPool();
+                            }
+                        });
+                        va.addListener(new Animator.AnimatorListener() {
+                            @Override
+                            public void onAnimationStart(Animator animator) {
+
+                            }
+
+                            @Override
+                            public void onAnimationEnd(Animator animator) {
+                                line.alpha = 255;
+                                generateDrawPool();
+                            }
+
+                            @Override
+                            public void onAnimationCancel(Animator animator) {
+                                line.alpha = 255;
+                                generateDrawPool();
+                            }
+
+                            @Override
+                            public void onAnimationRepeat(Animator animator) {
+
+                            }
+                        });
+                        va.start();
+
+                    }
+                });
+            } else {
+                line.alpha = 255;
+                generateDrawPool();
+            }
+        }
+
+        public abstract class Line {
+            float ini_line_visibility;
+            float end_line_visibility;
+            boolean visible = false;
+            int alpha;
+            int segmentsLoad = 0;
+            Segment[] segments;
+
+            public abstract Segment getNewSegment();
+
+            public Line(float ini_line_visibility, float end_line_visibility, int segments) {
+                this.ini_line_visibility = ini_line_visibility;
+                this.end_line_visibility = end_line_visibility;
+                this.segments = new Segment[segments];
+            }
+
+            public boolean isVisible() {
+                return visible;
+            }
+
+            public void freeMemory() {
+                visible = false;
+                segmentsLoad = 0;
+                for (int j = 0; j < segments.length; j++) {
+                    segments[j].freeMemory();
+                }
+            }
+
+            public void loadBitmaps() {
+                for (int j = 0; j < segments.length; j++) {
+                    segments[j].loadBitmap();
+                }
+            }
+
+            public void draw(Canvas canvas) {
+                for (int j = 0; j < segments.length; j++) {
+                    segments[j].draw(canvas);
+                }
+            }
+
+            public void visibilityChanged() {
+                if (!animatingSeek) {
+                    visible = !visible;
+                    if (visible) {
+                        loadBitmaps();
+                    } else {
+                        freeMemory();
+                    }
+                }
+            }
+
+
+            public boolean segmentLoaded(){
+                segmentsLoad++;
+                return  segmentsLoad == segments.length;
+            }
+
+            public abstract class Segment {
+                Bitmap segment;
+                ImagesStates state;
+                int dx, dy;
+
+                public Segment() {
+                    alpha = 255;
+                    state = ImagesStates.NULL;
+                }
+
+                public abstract void draw(Canvas canvas);
+
+                public void freeMemory() {
+                    if (segment != null) {
+                        state = ImagesStates.RECYCLED;
+                        segment.recycle();
+                        segment = null;
+                        alpha = 0;
+                    }
+                    state = ImagesStates.NULL;
+                }
+
+                public void loadBitmap() {
+                    if (!animatingSeek)
+                        new Thread(new Runnable() {
+                            @Override
+                            public void run() {
+                                try {
+                                    if (state == ImagesStates.NULL) {
+                                        state = ImagesStates.LOADING;
+                                        alpha = 0;
+                                        BitmapFactory.Options options = new BitmapFactory.Options();
+                                        options.inPreferredConfig = Bitmap.Config.RGB_565;
+                                        if (!error) {
+                                            if (tp == 1) {
+                                                segment = BitmapDecoder.from(path).useBuiltInDecoder(false).config(Bitmap.Config.RGB_565).decode();
+                                                if (segments == null) {
+                                                    segment = BitmapDecoder.from(path).useBuiltInDecoder(true).config(Bitmap.Config.RGB_565).decode();
+                                                }
+                                            } else {
+                                                try {
+                                                    int right = dx + pxs + 2, bottom = dy + pys + 2;
+                                                    if (right > original_width)
+                                                        right = (int) original_width;
+                                                    if (bottom > original_height)
+                                                        bottom = (int) original_height;
+                                                    segment = BitmapDecoder.from(path).region(dx, dy, right, bottom).useBuiltInDecoder(false).config(Bitmap.Config.RGB_565).decode();
+                                                    if (segment == null) {
+                                                        segment = BitmapDecoder.from(path).region(dx, dy, right, bottom).useBuiltInDecoder(true).config(Bitmap.Config.RGB_565).decode();
+                                                    }
+                                                } catch (Exception e) {
+                                                    e.printStackTrace();
+                                                }
+                                            }
+                                        } else {
+                                            InputStream inputStream = getBitmapFromAsset("broke.png");
+                                            if (tp == 1) {
+                                                segment = BitmapFactory.decodeStream(inputStream, null, options);
+                                            } else {
+                                                try {
+                                                    int right = dx + pxs + 2, bottom = dy + pys + 2;
+                                                    if (right > original_width)
+                                                        right = (int) original_width;
+                                                    if (bottom > original_height)
+                                                        bottom = (int) original_height;
+                                                    segment = BitmapDecoder.from(inputStream).region(dx, dy, right, bottom).useBuiltInDecoder(false).config(Bitmap.Config.RGB_565).decode();
+                                                } catch (Exception e) {
+                                                    e.printStackTrace();
+                                                }
+                                            }
+                                            inputStream.close();
+                                        }
+                                        if (segment != null) {
+                                            state = ImagesStates.LOADED;
+                                            if(segmentLoaded())
+                                                showOnLoad(Line.this);
+                                        } else {
+                                            state = ImagesStates.NULL;
+                                        }
+                                    }
+                                } catch (Exception | OutOfMemoryError e) {
+                                    e.printStackTrace();
+                                }
+                            }
+                        }).start();
+                }
+            }
+
+        }
+    }
+
+
+    public static int getIndex(ArrayList<Page> a, float sv) {
+        int b = 0;
+        if (a.size() == 0) {
+            return b;
+        }
+        int low = 0;
+        int high = a.size() - 1;
+
+        while (low <= high) {
+            int middle = (low + high) / 2;
+            if (sv > a.get(middle).end_visibility) {
+                low = middle + 1;
+            } else if (sv < a.get(middle).init_visibility) {
+                high = middle - 1;
+            } else { // The element has been found
+                return middle;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Gesture section
+     */
 
     @Override
     public boolean onTouchEvent(@NonNull MotionEvent ev) {
@@ -456,260 +734,6 @@ public abstract class ReaderContinuous extends Reader implements GestureDetector
         });
         va.start();
         return false;
-    }
-
-    @Override
-    protected Parcelable onSaveInstanceState() {
-        Bundle b = new Bundle();
-        b.putParcelable("state", super.onSaveInstanceState());
-        return b;
-    }
-
-    @Override
-    protected void onRestoreInstanceState(Parcelable state) {
-        if (state instanceof Bundle) {
-            super.onRestoreInstanceState(((Bundle) state).getParcelable("state"));
-        } else {
-            super.onRestoreInstanceState(state);
-        }
-    }
-
-    /*
-     * Starting from 0
-     */
-    public abstract float getPagePosition(int page);
-
-    private InputStream getBitmapFromAsset(String strName) {
-        AssetManager assetManager = getContext().getAssets();
-        InputStream iStr = null;
-        try {
-            iStr = assetManager.open(strName);
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-        return iStr;
-    }
-
-
-    public enum ImagesStates {NULL, RECYCLED, ERROR, LOADING, LOADED}
-
-    public abstract class Page {
-        String path;
-        float original_width;
-        float original_height;
-        float init_visibility;
-        float end_visibility;
-        float unification_scale;
-        float scaled_height;
-        float scaled_width;
-        boolean initialized = false;
-        Segment[] segments;
-        int pw, ph;
-        int vp, hp, tp; //vertical and horizontal parts count and total
-        boolean error = false;
-        boolean lastVisibleState = false;
-
-        public abstract boolean isVisible();
-
-        public abstract Segment getNewSegment();
-
-        public abstract float getVisiblePercent();
-
-        public void initValues() {
-            vp = (int) (original_height / mTextureMax) + 1;
-            hp = (int) (original_width / mTextureMax) + 1;
-            pw = (int) (original_width / hp);
-            ph = (int) (original_height / vp);
-            tp = vp * hp;
-            segments = new Segment[tp];
-            for (int i = 0; i < vp; i++) {
-                for (int j = 0; j < hp; j++) {
-                    int idx = (i * hp) + j;
-                    segments[idx] = getNewSegment();
-                    segments[idx].dy = i * ph;
-                    segments[idx].dx = j * pw;
-                }
-            }
-            initialized = true;
-        }
-
-        public String getPath() {
-            return path;
-        }
-
-        public void freeMemory() {
-            if (segments != null)
-                for (Segment s : segments) {
-                    s.freeMemory();
-                }
-        }
-
-        public ArrayList<Segment> getVisibleSegments() {
-            ArrayList<Segment> _segments = new ArrayList<>();
-            if (segments != null)
-                for (Segment s : segments) {
-                    if (s.isVisible()) {
-                        _segments.add(s);
-                    }
-                }
-            return _segments;
-        }
-
-        public void showOnLoad(final Segment segment) {
-            if (segment.isVisible()) {
-                mHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        ValueAnimator va = ValueAnimator.ofInt(0, 255);
-                        va.setDuration(300);
-                        va.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
-                            @Override
-                            public void onAnimationUpdate(ValueAnimator valueAnimator) {
-                                segment.alpha = (int) valueAnimator.getAnimatedValue();
-                                generateDrawPool();
-                            }
-                        });
-                        va.addListener(new Animator.AnimatorListener() {
-                            @Override
-                            public void onAnimationStart(Animator animator) {
-
-                            }
-
-                            @Override
-                            public void onAnimationEnd(Animator animator) {
-                                segment.alpha = 255;
-                                generateDrawPool();
-                            }
-
-                            @Override
-                            public void onAnimationCancel(Animator animator) {
-                                segment.alpha = 255;
-                                generateDrawPool();
-                            }
-
-                            @Override
-                            public void onAnimationRepeat(Animator animator) {
-
-                            }
-                        });
-                        va.start();
-
-                    }
-                });
-            } else {
-                segment.alpha = 255;
-                generateDrawPool();
-            }
-        }
-
-        public abstract class Segment {
-            boolean visible = false;
-            Bitmap segment;
-            ImagesStates state;
-            int dx, dy;
-            int alpha;
-
-            public Segment() {
-                alpha = 255;
-                state = ImagesStates.NULL;
-            }
-
-            public boolean isVisible() {
-                return visible;
-            }
-
-            public abstract boolean checkVisibility();
-
-            public abstract void draw(Canvas canvas);
-
-            public void visibilityChanged() {
-                if (!animatingSeek) {
-                    visible = !visible;
-                    if (visible) {
-                        loadBitmap();
-                    } else {
-                        freeMemory();
-                    }
-                }
-            }
-
-
-            public void freeMemory() {
-                if (segment != null) {
-                    visible = false;
-                    state = ImagesStates.RECYCLED;
-                    segment.recycle();
-                    segment = null;
-                    alpha = 0;
-                }
-                state = ImagesStates.NULL;
-            }
-
-            public void loadBitmap() {
-                if (!animatingSeek)
-                    new Thread(new Runnable() {
-                        @Override
-                        public void run() {
-                            try {
-                                if (state == ImagesStates.NULL) {
-                                    state = ImagesStates.LOADING;
-                                    alpha = 0;
-                                    BitmapFactory.Options options = new BitmapFactory.Options();
-                                    options.inPreferredConfig = Bitmap.Config.RGB_565;
-                                    if (!error) {
-                                        if (tp == 1) {
-                                            segment = BitmapDecoder.from(path).useBuiltInDecoder(false).config(Bitmap.Config.RGB_565).decode();
-                                            if (segments == null) {
-                                                segment = BitmapDecoder.from(path).useBuiltInDecoder(true).config(Bitmap.Config.RGB_565).decode();
-                                            }
-
-                                        } else {
-                                            try {
-                                                int right = dx + pw + 2, bottom = dy + ph + 2;
-                                                if (right > original_width)
-                                                    right = (int) original_width;
-                                                if (bottom > original_height)
-                                                    bottom = (int) original_height;
-                                                segment = BitmapDecoder.from(path).region(dx, dy, right, bottom).useBuiltInDecoder(false).config(Bitmap.Config.RGB_565).decode();
-                                                if (segment == null) {
-                                                    segment = BitmapDecoder.from(path).region(dx, dy, right, bottom).useBuiltInDecoder(true).config(Bitmap.Config.RGB_565).decode();
-                                                }
-                                            } catch (Exception e) {
-                                                e.printStackTrace();
-                                            }
-                                        }
-                                    } else {
-                                        InputStream inputStream = getBitmapFromAsset("broke.png");
-                                        if (tp == 1) {
-                                            segment = BitmapFactory.decodeStream(inputStream, null, options);
-                                        } else {
-                                            try {
-                                                int right = dx + pw + 2, bottom = dy + ph + 2;
-                                                if (right > original_width)
-                                                    right = (int) original_width;
-                                                if (bottom > original_height)
-                                                    bottom = (int) original_height;
-                                                segment = BitmapDecoder.from(inputStream).region(dx, dy, right, bottom).useBuiltInDecoder(false).config(Bitmap.Config.RGB_565).decode();
-                                            } catch (Exception e) {
-                                                e.printStackTrace();
-                                            }
-                                        }
-                                        inputStream.close();
-                                    }
-                                    if (segment != null) {
-                                        state = ImagesStates.LOADED;
-                                        showOnLoad(Segment.this);
-                                    } else {
-                                        state = ImagesStates.NULL;
-                                    }
-                                }
-                            } catch (Exception | OutOfMemoryError e) {
-                                e.printStackTrace();
-                            }
-                        }
-                    }).start();
-            }
-        }
     }
 
     protected class ScaleListener extends

@@ -4,7 +4,12 @@ import android.animation.Animator;
 import android.animation.ValueAnimator;
 import android.content.Context;
 import android.graphics.Canvas;
+import android.support.annotation.NonNull;
 import android.view.MotionEvent;
+
+import java.util.ArrayList;
+
+import static ar.rulosoft.mimanganu.componentes.readers.continuos.ReaderContinuous.Page.Line.*;
 
 /**
  * Created by Raul on 21/06/2016.
@@ -28,7 +33,6 @@ public abstract class HorizontalReader extends ReaderContinuous {
                 dimension.unification_scale = (screenWidth / dimension.original_width);
                 dimension.scaled_width = screenWidth;
                 dimension.scaled_height = screenHeight * dimension.unification_scale;
-
             }
         }
     }
@@ -45,6 +49,23 @@ public abstract class HorizontalReader extends ReaderContinuous {
             dimension.unification_scale = 1;
             dimension.scaled_width = screenWidth;
             dimension.scaled_height = screenHeight;
+        }
+    }
+
+    @Override
+    protected void generateSegmentsArray() {
+        int hSegmentCount = 0;
+        for (Page page : pages) {
+            hSegmentCount += page.xp;
+        }
+        segments = new ArrayList[hSegmentCount];
+        for (Page page : pages) {
+            segments[page.number - 1] = new ArrayList<>();
+            for (int i = 0; i < page.yp; i++) {
+                for (int j = 0; j < page.xp; j++) {
+
+                }
+            }
         }
     }
 
@@ -79,7 +100,7 @@ public abstract class HorizontalReader extends ReaderContinuous {
             float value = 0;
             if (pages.get(cIdx) != null)
                 value = pages.get(cIdx).init_visibility;
-            Page page = initValues(pages.get(pageIdx).path);
+            Page page = initValues(pages.get(pageIdx).path, pageIdx + 1);
             pages.set(pageIdx, page);
             calculateParticularScale(pages.get(pageIdx));
             calculateVisibilities();
@@ -136,8 +157,8 @@ public abstract class HorizontalReader extends ReaderContinuous {
     }
 
     @Override
-    protected Page getNewPage() {
-        return new HPage();
+    protected Page getNewPage(int number) {
+        return new HPage(number);
     }
 
     @Override
@@ -160,12 +181,18 @@ public abstract class HorizontalReader extends ReaderContinuous {
 
 
     protected class HPage extends Page {
+
+        public HPage(int number) {
+            super(number);
+        }
+
         @Override
         public boolean isVisible() {
+
             float visibleRight = (xScroll * mScaleFactor + screenWidth);
-            final boolean visibility = (xScroll * mScaleFactor <= init_visibility * mScaleFactor && init_visibility * mScaleFactor <= visibleRight) ||
-                    (xScroll * mScaleFactor <= end_visibility * mScaleFactor && end_visibility * mScaleFactor <= visibleRight) ||
-                    (init_visibility * mScaleFactor < xScroll * mScaleFactor && end_visibility * mScaleFactor >= visibleRight);
+            float visibleLeft = (xScroll * mScaleFactor);
+
+            final boolean visibility = (visibleRight >= init_visibility * mScaleFactor && end_visibility * mScaleFactor >= visibleLeft);
             new Thread(new Runnable() {
                 @Override
                 public void run() {
@@ -176,8 +203,10 @@ public abstract class HorizontalReader extends ReaderContinuous {
                         }
                     }
                     if (visibility && segments != null)
-                        for (Segment s : segments) {
-                            s.checkVisibility();
+                        for (int i = 0; i < yp; i++) {
+                            for (int j = 0; j < yp; j++) {
+                                // TODO segments[i][j].checkVisibility();
+                            }
                         }
                 }
             }).start();
@@ -185,8 +214,8 @@ public abstract class HorizontalReader extends ReaderContinuous {
         }
 
         @Override
-        public Segment getNewSegment() {
-            return new HSegment();
+        Line getNewLine(float init_visibility, float end_visibility, int segments) {
+            return new HLine(init_visibility, end_visibility, segments);
         }
 
         @Override
@@ -206,34 +235,32 @@ public abstract class HorizontalReader extends ReaderContinuous {
             }
         }
 
-        public class HSegment extends Segment {
-            @Override
-            public boolean checkVisibility() {
-                float visibleLeft = xScroll * mScaleFactor;
-                float visibleRight = visibleLeft + screenWidth;
-                float _init_visibility = init_visibility + dx * unification_scale;
-                float _end_visibility = _init_visibility + pw * unification_scale;
-                boolean visibility = (visibleLeft <= _init_visibility * mScaleFactor && _init_visibility * mScaleFactor <= visibleRight) ||
-                        (visibleLeft <= _end_visibility * mScaleFactor && _end_visibility * mScaleFactor <= visibleRight) ||
-                        (_init_visibility * mScaleFactor < visibleLeft && _end_visibility * mScaleFactor >= visibleRight);
-                if (visible != visibility) {
-                    visibilityChanged();
-                }
-                return visibility;
+        public class HLine extends Line {
+
+            public HLine(float ini_line_visibility, float end_line_visibility, int segments) {
+                super(ini_line_visibility, end_line_visibility, segments);
             }
 
             @Override
-            public void draw(Canvas canvas) {
-                if (state == ImagesStates.LOADED) {
-                    m.reset();
-                    mPaint.setAlpha(alpha);
-                    m.postTranslate(dx, dy);
-                    m.postScale(unification_scale, unification_scale);
-                    m.postTranslate(init_visibility - xScroll, -yScroll);
-                    m.postScale(mScaleFactor, mScaleFactor);
-                    try {
-                        canvas.drawBitmap(segment, m, mPaint);
-                    } catch (Exception ignored) {
+            public Segment getNewSegment() {
+                return new HSegment();
+            }
+
+            public class HSegment extends Segment {
+
+                @Override
+                public void draw(Canvas canvas) {
+                    if (state == ImagesStates.LOADED) {
+                        m.reset();
+                        mPaint.setAlpha(alpha);
+                        m.postTranslate(dx, dy);
+                        m.postScale(unification_scale, unification_scale);
+                        m.postTranslate(init_visibility - xScroll, -yScroll);
+                        m.postScale(mScaleFactor, mScaleFactor);
+                        try {
+                            canvas.drawBitmap(segment, m, mPaint);
+                        } catch (Exception ignored) {
+                        }
                     }
                 }
             }
